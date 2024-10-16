@@ -107,11 +107,30 @@ void waypoint()
 {
 	if (W_index < Max_waypoint)
 	{
-		strcpy(save_lat[W_index], navi.latitude); //de gegevens van navi.latitude kopieren naar save_lat
-		strcpy(save_longi[W_index], navi.longitude);
-		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
-		HAL_Delay(800);
-		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+        // Convert saved latitude and longitude strings to doubles
+        double save_latF = atof(save_lat[W_index]);
+        double save_longiF = atof(save_longi[W_index]);
+
+        // Convert latitude from degrees and minutes to decimal format
+        double degrees = save_latF / 100.0;
+        int d = (int)degrees;
+        double minutes = (degrees - d) * 100.0;
+        double latitude_decimal = d + (minutes / 60.0);
+
+        // Convert longitude from degrees and minutes to decimal format
+        double degrees2 = save_longiF / 100.0;
+        int d2 = (int)degrees2;
+        double minutes2 = (degrees2 - d2) * 100.0;
+        double longitude_decimal = d2 + (minutes2 / 60.0);
+
+        // Convert the decimal latitude and longitude to strings
+        sprintf(save_lat[W_index], "%.6f", latitude_decimal); // Ensure save_lat can hold this string
+        sprintf(save_longi[W_index], "%.6f", longitude_decimal); // Ensure save_longi can hold this string
+
+        // Set GPIO pin and delay for visual feedback
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+        HAL_Delay(800);
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
 
 		W_index++;
 
@@ -138,29 +157,7 @@ void calc_angle()
 
 	 char buffer[50];
     // Converting latitude and longitude strings to double
-	double save_latF = atof(save_lat[i]); //
-	double save_longiF = atof(save_longi[i]);
 
-
-    sprintf(buffer, "\r\n\t Waarde van save_latF: \t%f", save_latF);
-    UART_puts(buffer);  // Print wx
-
-
-
-
-
-
-
-
-        double degrees = save_latF / 100;
-        int d = (int)degrees;
-        double minutes = (degrees - d) * 100;
-        double latitude_decimal = d + (minutes / 60.0);
-
-        double degrees2 = save_longiF / 100;
-        int d2 = (int)degrees2;
-        double minutes2 = (degrees2 - d2) * 100;
-        double longitude_decimal = d2 + (minutes2 / 60.0);
 
    // double latF = atof(navi.latitude);  // Current latitude
    // double longiF = atof(navi.longitude);  // Current longitude
