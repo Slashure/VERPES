@@ -1,508 +1,366 @@
 /**
-  ******************************************************************************
-  * @file      startup_stm32f407xx.s
-  * @author    MCD Application Team
-  * @brief     STM32F407xx Devices vector table for GCC based toolchains. 
-  *            This module performs:
-  *                - Set the initial SP
-  *                - Set the initial PC == Reset_Handler,
-  *                - Set the vector table entries with the exceptions ISR address
-  *                - Branches to main in the C library (which eventually
-  *                  calls main()).
-  *            After Reset the Cortex-M4 processor is in Thread mode,
-  *            priority is Privileged, and the Stack is set to Main.
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2017 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
-    
-  .syntax unified
-  .cpu cortex-m4
-  .fpu softvfp
-  .thumb
+* @file gps.c
+* @brief Behandelt de gps input-strings (NMEA-protocol) van UART1.<br>
+* <b>Demonstreert: xMessageBufferRead() </b><br>
+* Aan UART1 is een interrupt gekoppeld (zie main.c: HAL_UART_RxCpltCallback(),
+* die de inkomende string op een messagebuffer zet, die we hier uitlezen en verwerken.<br>
+* @author MSC
+*
+* @date 5/5/2023
+*/
+#include <math.h>
+#include <admin.h>
+#include "main.h"
+#include "cmsis_os.h"
+#include "gps.h"
+#include <stdlib.h>
 
-.global  g_pfnVectors
-.global  Default_Handler
 
-/* start address for the initialization values of the .data section. 
-defined in linker script */
-.word  _sidata
-/* start address for the .data section. defined in linker script */  
-.word  _sdata
-/* end address for the .data section. defined in linker script */
-.word  _edata
-/* start address for the .bss section. defined in linker script */
-.word  _sbss
-/* end address for the .bss section. defined in linker script */
-.word  _ebss
-/* stack used for SystemInit_ExtMemCtl; always internal RAM used */
+//init
+int Max_waypoint = 20;
+int W_index= 0;
+int i = 0;
+
+double wx;
+double wy;
+int d;
+int d2;
+
+
+char courseS = 180;
+char servohoek = 300;
+char pwm;
+
+
+char save_lat[20][20];
+char save_longi[20][20];
+
+double Whoek;
+double latitude_decimal;
+double longitude_decimal;
+
+
+GNRMC gnrmc; // global struct for GNRMC-messages
+NAVI navi;
 
 /**
- * @brief  This is the code that gets called when the processor first
- *          starts execution following a reset event. Only the absolutely
- *          necessary set is performed, after which the application
- *          supplied main() routine is called. 
- * @param  None
- * @retval : None
+* @brief De chars van de binnengekomen GNRMC-string worden in data omgezet, dwz in een
+* GNRMC-struct, mbv strtok(); De struct bevat nu alleen chars - je kunt er ook voor kiezen
+* om gelijk met doubles te werken, die je dan met atof(); omzet.
+* @return void
 */
+void fill_GNRMC(char *message)
+{
+	// example: $GNRMC,164435.000,A,5205.9505,N,00507.0873,E,0.49,21.70,140423,,,A
+	//          id    , time     ,s,
+	char *tok = ",";
+	char *s;
 
-    .section  .text.Reset_Handler
-  .weak  Reset_Handler
-  .type  Reset_Handler, %function
-Reset_Handler:  
-  ldr   sp, =_estack     /* set stack pointer */
 
-/* Copy the data segment initializers from flash to SRAM */  
-  ldr r0, =_sdata
-  ldr r1, =_edata
-  ldr r2, =_sidata
-  movs r3, #0
-  b LoopCopyDataInit
+	memset(&gnrmc, 0, sizeof(GNRMC)); // clear the struct
 
-CopyDataInit:
-  ldr r4, [r2, r3]
-  str r4, [r0, r3]
-  adds r3, r3, #4
+	s = strtok(message, tok); // 0. header;
+	strcpy(gnrmc.head, s);
 
-LoopCopyDataInit:
-  adds r4, r0, r3
-  cmp r4, r1
-  bcc CopyDataInit
-  
-/* Zero fill the bss segment. */
-  ldr r2, =_sbss
-  ldr r4, =_ebss
-  movs r3, #0
-  b LoopFillZerobss
+	s = strtok(NULL, tok);    // 1. time; not used
 
-FillZerobss:
-  str  r3, [r2]
-  adds r2, r2, #4
+	s = strtok(NULL, tok);    // 2. valid;
+	gnrmc.status = s[0];
 
-LoopFillZerobss:
-  cmp r2, r4
-  bcc FillZerobss
+	s = strtok(NULL, tok);    // 3. latitude;
+	strcpy(gnrmc.latitude, s);
+	strcpy (navi.latitude, s); //copy de latitude naar navi.latitude
 
-/* Call the clock system intitialization function.*/
-  bl  SystemInit   
-/* Call static constructors */
-    bl __libc_init_array
-/* Call the application's entry point.*/
-  bl  main
-  bx  lr    
-.size  Reset_Handler, .-Reset_Handler
+	s = strtok(NULL, tok);    // 4. N/S; not used
 
+	s = strtok(NULL, tok);    // 5. longitude;
+	strcpy(gnrmc.longitude, s);
+	strcpy (navi.longitude, s); // copy de longitude naar navi.longitude
+
+
+	s = strtok(NULL, tok);    // 6. E/W; not used
+
+	s = strtok(NULL, tok);    // 7. speed;
+	strcpy(gnrmc.speed, s);
+
+	s = strtok(NULL, tok);    // 8. course;
+	strcpy(gnrmc.course, s);
+	strcpy(navi.course, s);
+
+
+	if (Uart_debug_out & GPS_DEBUG_OUT)
+	{
+		UART_puts("\r\n\t GPS type: \t");  UART_puts(gnrmc.head);
+		UART_puts("\r\n\t status: \t\t");  UART_putchar(gnrmc.status);
+		UART_puts("\r\n\t latitude:\t\t"); UART_puts(gnrmc.latitude);
+		UART_puts("\r\n\t longitude:\t");  UART_puts(gnrmc.longitude);
+		UART_puts("\r\n\t speed:    \t");  UART_puts(gnrmc.speed);
+		UART_puts("\r\n\t course:   \t");  UART_puts(gnrmc.course);
+
+
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); //ledje aanzetten om te laten zien dat de debug output actief is
+		HAL_Delay(400);
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
+		UART_puts("\r\n\tBOGARRR: \t");  UART_puts(gnrmc.head);
+		UART_puts("\r\n\t Navi_Long: \t");  UART_puts(navi.longitude);
+		UART_puts("\r\n\t Navi_Lat: \t");  UART_puts(navi.latitude);
+		UART_puts("\r\n\t Navi_Course: \t");  UART_puts(navi.course);
+
+	}
+}
+
+
+
+
+void waypoint()
+{
+	if (W_index < Max_waypoint)
+	{
+		strcpy(save_lat[W_index], navi.latitude); //de gegevenhs van navi.latitude kopieren naar save_lat
+		strcpy(save_longi[W_index], navi.longitude);
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+		HAL_Delay(800);
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+
+		W_index++;
+
+		// debug output
+		UART_puts("\r\n\t Navi_Lat aantal points: \t");  UART_putint(W_index);
+		UART_puts("\r\n\t MAX aantal points: \t");  UART_putint(Max_waypoint);
+		UART_puts("\r\n\tBOGARRR: \t");  UART_puts(gnrmc.head);
+		UART_puts("\r\n\t Navi_Long: \t");  UART_puts(navi.longitude);
+		UART_puts("\r\n\t Navi_Lat: \t");  UART_puts(navi.latitude);
+		UART_puts("\r\n\t Navi_Longi point 5 is: \t");  UART_puts(save_longi[4]);
+		UART_puts("\r\n\t Navi_Lat point 5 is: \t");  UART_puts(save_lat[4]);
+	}
+	else
+	{
+		UART_puts("Max_waypoints bereikt\r\n");
+
+	}
+}
+
+void calc_angle()
+{
+
+	char buffer[50];
+
+
+
+	if (i < 20)
+	{
+
+    // Converting latitude and longitude strings to double
+		double save_latF = atof(save_lat[i]); //
+		double save_longiF = atof(save_longi[i]);
+
+
+        double degrees = save_latF / 100;
+        int d = (int)degrees;
+        double minutes = (degrees - d) * 100;
+        double latitude_decimal = d + (minutes / 60.0);
+
+        double degrees2 = save_longiF / 100;
+        int d2 = (int)degrees2;
+        double minutes2 = (degrees2 - d2) * 100;
+        double longitude_decimal = d2 + (minutes2 / 60.0);
+
+        double wx =  latitude_decimal;
+        double wy =  longitude_decimal;
+
+        // Calculating the angle based on the quadrant
+        if (wx > 0 && wy > 0)  // + +
+        {
+        	Whoek = 90 - atan2(wy, wx) * (180.0 / M_PI);  // atan2 returns radians, convert to degrees
+        }
+		else if (wx < 0 && wy > 0)  // - +
+		{
+			Whoek = 270 + atan2(wy, wx) * (180.0 / M_PI);
+		}
+		else if (wx < 0 && wy < 0)  // - -
+		{
+			Whoek = 270 - atan2(wy, wx) * (180.0 / M_PI);
+		}
+		else if (wx > 0 && wy < 0)  // + -
+		{
+			Whoek = 90 + atan2(wy, wx) * (180.0 / M_PI);
+		}
+
+		i++;
+
+
+		osDelay(100);
+	}
+	else
+	{
+		UART_puts("Max waypoint reached no more calcs for U :)\r\n");
+
+	}
+}
 /**
- * @brief  This is the code that gets called when the processor receives an 
- *         unexpected interrupt.  This simply enters an infinite loop, preserving
- *         the system state for examination by a debugger.
- * @param  None     
- * @retval None       
+* @brief Leest de GPS-NMEA-strings die via de UART via interrupt-handler (HAL_UART_RxCpltCallback)
+* binnenkomen. * De handler zet elk inkomende character gelijk op een queue, die hier uitgelezen wordt.
+* Vervolgens wordt hiervan een GPS-message opgebouwd en verwerkt.
+* @return void
 */
-    .section  .text.Default_Handler,"ax",%progbits
-Default_Handler:
-Infinite_Loop:
-  b  Infinite_Loop
-  .size  Default_Handler, .-Default_Handler
-/******************************************************************************
-*
-* The minimal vector table for a Cortex M3. Note that the proper constructs
-* must be placed on this to ensure that it ends up at physical address
-* 0x0000.0000.
-* 
-*******************************************************************************/
-   .section  .isr_vector,"a",%progbits
-  .type  g_pfnVectors, %object
-  .size  g_pfnVectors, .-g_pfnVectors
-    
-    
-g_pfnVectors:
-  .word  _estack
-  .word  Reset_Handler
-  .word  NMI_Handler
-  .word  HardFault_Handler
-  .word  MemManage_Handler
-  .word  BusFault_Handler
-  .word  UsageFault_Handler
-  .word  0
-  .word  0
-  .word  0
-  .word  0
-  .word  SVC_Handler
-  .word  DebugMon_Handler
-  .word  0
-  .word  PendSV_Handler
-  .word  SysTick_Handler
-  
-  /* External Interrupts */
-  .word     WWDG_IRQHandler                   /* Window WatchDog              */                                        
-  .word     PVD_IRQHandler                    /* PVD through EXTI Line detection */                        
-  .word     TAMP_STAMP_IRQHandler             /* Tamper and TimeStamps through the EXTI line */            
-  .word     RTC_WKUP_IRQHandler               /* RTC Wakeup through the EXTI line */                      
-  .word     FLASH_IRQHandler                  /* FLASH                        */                                          
-  .word     RCC_IRQHandler                    /* RCC                          */                                            
-  .word     EXTI0_IRQHandler                  /* EXTI Line0                   */                        
-  .word     EXTI1_IRQHandler                  /* EXTI Line1                   */                          
-  .word     EXTI2_IRQHandler                  /* EXTI Line2                   */                          
-  .word     EXTI3_IRQHandler                  /* EXTI Line3                   */                          
-  .word     EXTI4_IRQHandler                  /* EXTI Line4                   */                          
-  .word     DMA1_Stream0_IRQHandler           /* DMA1 Stream 0                */                  
-  .word     DMA1_Stream1_IRQHandler           /* DMA1 Stream 1                */                   
-  .word     DMA1_Stream2_IRQHandler           /* DMA1 Stream 2                */                   
-  .word     DMA1_Stream3_IRQHandler           /* DMA1 Stream 3                */                   
-  .word     DMA1_Stream4_IRQHandler           /* DMA1 Stream 4                */                   
-  .word     DMA1_Stream5_IRQHandler           /* DMA1 Stream 5                */                   
-  .word     DMA1_Stream6_IRQHandler           /* DMA1 Stream 6                */                   
-  .word     ADC_IRQHandler                    /* ADC1, ADC2 and ADC3s         */                   
-  .word     CAN1_TX_IRQHandler                /* CAN1 TX                      */                         
-  .word     CAN1_RX0_IRQHandler               /* CAN1 RX0                     */                          
-  .word     CAN1_RX1_IRQHandler               /* CAN1 RX1                     */                          
-  .word     CAN1_SCE_IRQHandler               /* CAN1 SCE                     */                          
-  .word     EXTI9_5_IRQHandler                /* External Line[9:5]s          */                          
-  .word     TIM1_BRK_TIM9_IRQHandler          /* TIM1 Break and TIM9          */         
-  .word     TIM1_UP_TIM10_IRQHandler          /* TIM1 Update and TIM10        */         
-  .word     TIM1_TRG_COM_TIM11_IRQHandler     /* TIM1 Trigger and Commutation and TIM11 */
-  .word     TIM1_CC_IRQHandler                /* TIM1 Capture Compare         */                          
-  .word     TIM2_IRQHandler                   /* TIM2                         */                   
-  .word     TIM3_IRQHandler                   /* TIM3                         */                   
-  .word     TIM4_IRQHandler                   /* TIM4                         */                   
-  .word     I2C1_EV_IRQHandler                /* I2C1 Event                   */                          
-  .word     I2C1_ER_IRQHandler                /* I2C1 Error                   */                          
-  .word     I2C2_EV_IRQHandler                /* I2C2 Event                   */                          
-  .word     I2C2_ER_IRQHandler                /* I2C2 Error                   */                            
-  .word     SPI1_IRQHandler                   /* SPI1                         */                   
-  .word     SPI2_IRQHandler                   /* SPI2                         */                   
-  .word     USART1_IRQHandler                 /* USART1                       */                   
-  .word     USART2_IRQHandler                 /* USART2                       */                   
-  .word     USART3_IRQHandler                 /* USART3                       */                   
-  .word     EXTI15_10_IRQHandler              /* External Line[15:10]s        */                          
-  .word     RTC_Alarm_IRQHandler              /* RTC Alarm (A and B) through EXTI Line */                 
-  .word     OTG_FS_WKUP_IRQHandler            /* USB OTG FS Wakeup through EXTI line */                       
-  .word     TIM8_BRK_TIM12_IRQHandler         /* TIM8 Break and TIM12         */         
-  .word     TIM8_UP_TIM13_IRQHandler          /* TIM8 Update and TIM13        */         
-  .word     TIM8_TRG_COM_TIM14_IRQHandler     /* TIM8 Trigger and Commutation and TIM14 */
-  .word     TIM8_CC_IRQHandler                /* TIM8 Capture Compare         */                          
-  .word     DMA1_Stream7_IRQHandler           /* DMA1 Stream7                 */                          
-  .word     FSMC_IRQHandler                   /* FSMC                         */                   
-  .word     SDIO_IRQHandler                   /* SDIO                         */                   
-  .word     TIM5_IRQHandler                   /* TIM5                         */                   
-  .word     SPI3_IRQHandler                   /* SPI3                         */                   
-  .word     UART4_IRQHandler                  /* UART4                        */                   
-  .word     UART5_IRQHandler                  /* UART5                        */                   
-  .word     TIM6_DAC_IRQHandler               /* TIM6 and DAC1&2 underrun errors */                   
-  .word     TIM7_IRQHandler                   /* TIM7                         */
-  .word     DMA2_Stream0_IRQHandler           /* DMA2 Stream 0                */                   
-  .word     DMA2_Stream1_IRQHandler           /* DMA2 Stream 1                */                   
-  .word     DMA2_Stream2_IRQHandler           /* DMA2 Stream 2                */                   
-  .word     DMA2_Stream3_IRQHandler           /* DMA2 Stream 3                */                   
-  .word     DMA2_Stream4_IRQHandler           /* DMA2 Stream 4                */                   
-  .word     ETH_IRQHandler                    /* Ethernet                     */                   
-  .word     ETH_WKUP_IRQHandler               /* Ethernet Wakeup through EXTI line */                     
-  .word     CAN2_TX_IRQHandler                /* CAN2 TX                      */                          
-  .word     CAN2_RX0_IRQHandler               /* CAN2 RX0                     */                          
-  .word     CAN2_RX1_IRQHandler               /* CAN2 RX1                     */                          
-  .word     CAN2_SCE_IRQHandler               /* CAN2 SCE                     */                          
-  .word     OTG_FS_IRQHandler                 /* USB OTG FS                   */                   
-  .word     DMA2_Stream5_IRQHandler           /* DMA2 Stream 5                */                   
-  .word     DMA2_Stream6_IRQHandler           /* DMA2 Stream 6                */                   
-  .word     DMA2_Stream7_IRQHandler           /* DMA2 Stream 7                */                   
-  .word     USART6_IRQHandler                 /* USART6                       */                    
-  .word     I2C3_EV_IRQHandler                /* I2C3 event                   */                          
-  .word     I2C3_ER_IRQHandler                /* I2C3 error                   */                          
-  .word     OTG_HS_EP1_OUT_IRQHandler         /* USB OTG HS End Point 1 Out   */                   
-  .word     OTG_HS_EP1_IN_IRQHandler          /* USB OTG HS End Point 1 In    */                   
-  .word     OTG_HS_WKUP_IRQHandler            /* USB OTG HS Wakeup through EXTI */                         
-  .word     OTG_HS_IRQHandler                 /* USB OTG HS                   */                   
-  .word     DCMI_IRQHandler                   /* DCMI                         */                   
-  .word     0                                 /* CRYP crypto                  */                   
-  .word     HASH_RNG_IRQHandler               /* Hash and Rng                 */
-  .word     FPU_IRQHandler                    /* FPU                          */
-                         
-                         
-/*******************************************************************************
-*
-* Provide weak aliases for each Exception handler to the Default_Handler. 
-* As they are weak aliases, any function with the same name will override 
-* this definition.
-* 
-*******************************************************************************/
-   .weak      NMI_Handler
-   .thumb_set NMI_Handler,Default_Handler
-  
-   .weak      HardFault_Handler
-   .thumb_set HardFault_Handler,Default_Handler
-  
-   .weak      MemManage_Handler
-   .thumb_set MemManage_Handler,Default_Handler
-  
-   .weak      BusFault_Handler
-   .thumb_set BusFault_Handler,Default_Handler
 
-   .weak      UsageFault_Handler
-   .thumb_set UsageFault_Handler,Default_Handler
 
-   .weak      SVC_Handler
-   .thumb_set SVC_Handler,Default_Handler
 
-   .weak      DebugMon_Handler
-   .thumb_set DebugMon_Handler,Default_Handler
+void servo()
+{
+	servohoek = 360 - courseS + Whoek;
+	if (servohoek > 360)
+	{
+	servohoek = servohoek - 360;
+	}
 
-   .weak      PendSV_Handler
-   .thumb_set PendSV_Handler,Default_Handler
+	pwm=servohoek*2/360+3.5;
+	for(int j=0; j<100; j++)
+	{
+	    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+	    HAL_Delay(pwm);
+	    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
+	    HAL_Delay(20-pwm);
+	}
 
-   .weak      SysTick_Handler
-   .thumb_set SysTick_Handler,Default_Handler              
-  
-   .weak      WWDG_IRQHandler                   
-   .thumb_set WWDG_IRQHandler,Default_Handler      
-                  
-   .weak      PVD_IRQHandler      
-   .thumb_set PVD_IRQHandler,Default_Handler
-               
-   .weak      TAMP_STAMP_IRQHandler            
-   .thumb_set TAMP_STAMP_IRQHandler,Default_Handler
-            
-   .weak      RTC_WKUP_IRQHandler                  
-   .thumb_set RTC_WKUP_IRQHandler,Default_Handler
-            
-   .weak      FLASH_IRQHandler         
-   .thumb_set FLASH_IRQHandler,Default_Handler
-                  
-   .weak      RCC_IRQHandler      
-   .thumb_set RCC_IRQHandler,Default_Handler
-                  
-   .weak      EXTI0_IRQHandler         
-   .thumb_set EXTI0_IRQHandler,Default_Handler
-                  
-   .weak      EXTI1_IRQHandler         
-   .thumb_set EXTI1_IRQHandler,Default_Handler
-                     
-   .weak      EXTI2_IRQHandler         
-   .thumb_set EXTI2_IRQHandler,Default_Handler 
-                 
-   .weak      EXTI3_IRQHandler         
-   .thumb_set EXTI3_IRQHandler,Default_Handler
-                        
-   .weak      EXTI4_IRQHandler         
-   .thumb_set EXTI4_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream0_IRQHandler               
-   .thumb_set DMA1_Stream0_IRQHandler,Default_Handler
-         
-   .weak      DMA1_Stream1_IRQHandler               
-   .thumb_set DMA1_Stream1_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream2_IRQHandler               
-   .thumb_set DMA1_Stream2_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream3_IRQHandler               
-   .thumb_set DMA1_Stream3_IRQHandler,Default_Handler 
-                 
-   .weak      DMA1_Stream4_IRQHandler              
-   .thumb_set DMA1_Stream4_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream5_IRQHandler               
-   .thumb_set DMA1_Stream5_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream6_IRQHandler               
-   .thumb_set DMA1_Stream6_IRQHandler,Default_Handler
-                  
-   .weak      ADC_IRQHandler      
-   .thumb_set ADC_IRQHandler,Default_Handler
-               
-   .weak      CAN1_TX_IRQHandler   
-   .thumb_set CAN1_TX_IRQHandler,Default_Handler
-            
-   .weak      CAN1_RX0_IRQHandler                  
-   .thumb_set CAN1_RX0_IRQHandler,Default_Handler
-                           
-   .weak      CAN1_RX1_IRQHandler                  
-   .thumb_set CAN1_RX1_IRQHandler,Default_Handler
-            
-   .weak      CAN1_SCE_IRQHandler                  
-   .thumb_set CAN1_SCE_IRQHandler,Default_Handler
-            
-   .weak      EXTI9_5_IRQHandler   
-   .thumb_set EXTI9_5_IRQHandler,Default_Handler
-            
-   .weak      TIM1_BRK_TIM9_IRQHandler            
-   .thumb_set TIM1_BRK_TIM9_IRQHandler,Default_Handler
-            
-   .weak      TIM1_UP_TIM10_IRQHandler            
-   .thumb_set TIM1_UP_TIM10_IRQHandler,Default_Handler
-      
-   .weak      TIM1_TRG_COM_TIM11_IRQHandler      
-   .thumb_set TIM1_TRG_COM_TIM11_IRQHandler,Default_Handler
-      
-   .weak      TIM1_CC_IRQHandler   
-   .thumb_set TIM1_CC_IRQHandler,Default_Handler
-                  
-   .weak      TIM2_IRQHandler            
-   .thumb_set TIM2_IRQHandler,Default_Handler
-                  
-   .weak      TIM3_IRQHandler            
-   .thumb_set TIM3_IRQHandler,Default_Handler
-                  
-   .weak      TIM4_IRQHandler            
-   .thumb_set TIM4_IRQHandler,Default_Handler
-                  
-   .weak      I2C1_EV_IRQHandler   
-   .thumb_set I2C1_EV_IRQHandler,Default_Handler
-                     
-   .weak      I2C1_ER_IRQHandler   
-   .thumb_set I2C1_ER_IRQHandler,Default_Handler
-                     
-   .weak      I2C2_EV_IRQHandler   
-   .thumb_set I2C2_EV_IRQHandler,Default_Handler
-                  
-   .weak      I2C2_ER_IRQHandler   
-   .thumb_set I2C2_ER_IRQHandler,Default_Handler
-                           
-   .weak      SPI1_IRQHandler            
-   .thumb_set SPI1_IRQHandler,Default_Handler
-                        
-   .weak      SPI2_IRQHandler            
-   .thumb_set SPI2_IRQHandler,Default_Handler
-                  
-   .weak      USART1_IRQHandler      
-   .thumb_set USART1_IRQHandler,Default_Handler
-                     
-   .weak      USART2_IRQHandler      
-   .thumb_set USART2_IRQHandler,Default_Handler
-                     
-   .weak      USART3_IRQHandler      
-   .thumb_set USART3_IRQHandler,Default_Handler
-                  
-   .weak      EXTI15_10_IRQHandler               
-   .thumb_set EXTI15_10_IRQHandler,Default_Handler
-               
-   .weak      RTC_Alarm_IRQHandler               
-   .thumb_set RTC_Alarm_IRQHandler,Default_Handler
-            
-   .weak      OTG_FS_WKUP_IRQHandler         
-   .thumb_set OTG_FS_WKUP_IRQHandler,Default_Handler
-            
-   .weak      TIM8_BRK_TIM12_IRQHandler         
-   .thumb_set TIM8_BRK_TIM12_IRQHandler,Default_Handler
-         
-   .weak      TIM8_UP_TIM13_IRQHandler            
-   .thumb_set TIM8_UP_TIM13_IRQHandler,Default_Handler
-         
-   .weak      TIM8_TRG_COM_TIM14_IRQHandler      
-   .thumb_set TIM8_TRG_COM_TIM14_IRQHandler,Default_Handler
-      
-   .weak      TIM8_CC_IRQHandler   
-   .thumb_set TIM8_CC_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream7_IRQHandler               
-   .thumb_set DMA1_Stream7_IRQHandler,Default_Handler
-                     
-   .weak      FSMC_IRQHandler            
-   .thumb_set FSMC_IRQHandler,Default_Handler
-                     
-   .weak      SDIO_IRQHandler            
-   .thumb_set SDIO_IRQHandler,Default_Handler
-                     
-   .weak      TIM5_IRQHandler            
-   .thumb_set TIM5_IRQHandler,Default_Handler
-                     
-   .weak      SPI3_IRQHandler            
-   .thumb_set SPI3_IRQHandler,Default_Handler
-                     
-   .weak      UART4_IRQHandler         
-   .thumb_set UART4_IRQHandler,Default_Handler
-                  
-   .weak      UART5_IRQHandler         
-   .thumb_set UART5_IRQHandler,Default_Handler
-                  
-   .weak      TIM6_DAC_IRQHandler                  
-   .thumb_set TIM6_DAC_IRQHandler,Default_Handler
-               
-   .weak      TIM7_IRQHandler            
-   .thumb_set TIM7_IRQHandler,Default_Handler
-         
-   .weak      DMA2_Stream0_IRQHandler               
-   .thumb_set DMA2_Stream0_IRQHandler,Default_Handler
-               
-   .weak      DMA2_Stream1_IRQHandler               
-   .thumb_set DMA2_Stream1_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream2_IRQHandler               
-   .thumb_set DMA2_Stream2_IRQHandler,Default_Handler
-            
-   .weak      DMA2_Stream3_IRQHandler               
-   .thumb_set DMA2_Stream3_IRQHandler,Default_Handler
-            
-   .weak      DMA2_Stream4_IRQHandler               
-   .thumb_set DMA2_Stream4_IRQHandler,Default_Handler
-            
-   .weak      ETH_IRQHandler      
-   .thumb_set ETH_IRQHandler,Default_Handler
-                  
-   .weak      ETH_WKUP_IRQHandler                  
-   .thumb_set ETH_WKUP_IRQHandler,Default_Handler
-            
-   .weak      CAN2_TX_IRQHandler   
-   .thumb_set CAN2_TX_IRQHandler,Default_Handler
-                           
-   .weak      CAN2_RX0_IRQHandler                  
-   .thumb_set CAN2_RX0_IRQHandler,Default_Handler
-                           
-   .weak      CAN2_RX1_IRQHandler                  
-   .thumb_set CAN2_RX1_IRQHandler,Default_Handler
-                           
-   .weak      CAN2_SCE_IRQHandler                  
-   .thumb_set CAN2_SCE_IRQHandler,Default_Handler
-                           
-   .weak      OTG_FS_IRQHandler      
-   .thumb_set OTG_FS_IRQHandler,Default_Handler
-                     
-   .weak      DMA2_Stream5_IRQHandler               
-   .thumb_set DMA2_Stream5_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream6_IRQHandler               
-   .thumb_set DMA2_Stream6_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream7_IRQHandler               
-   .thumb_set DMA2_Stream7_IRQHandler,Default_Handler
-                  
-   .weak      USART6_IRQHandler      
-   .thumb_set USART6_IRQHandler,Default_Handler
-                        
-   .weak      I2C3_EV_IRQHandler   
-   .thumb_set I2C3_EV_IRQHandler,Default_Handler
-                        
-   .weak      I2C3_ER_IRQHandler   
-   .thumb_set I2C3_ER_IRQHandler,Default_Handler
-                        
-   .weak      OTG_HS_EP1_OUT_IRQHandler         
-   .thumb_set OTG_HS_EP1_OUT_IRQHandler,Default_Handler
-               
-   .weak      OTG_HS_EP1_IN_IRQHandler            
-   .thumb_set OTG_HS_EP1_IN_IRQHandler,Default_Handler
-               
-   .weak      OTG_HS_WKUP_IRQHandler         
-   .thumb_set OTG_HS_WKUP_IRQHandler,Default_Handler
-            
-   .weak      OTG_HS_IRQHandler      
-   .thumb_set OTG_HS_IRQHandler,Default_Handler
-                  
-   .weak      DCMI_IRQHandler            
-   .thumb_set DCMI_IRQHandler,Default_Handler
-                                   
-   .weak      HASH_RNG_IRQHandler                  
-   .thumb_set HASH_RNG_IRQHandler,Default_Handler   
+}
 
-   .weak      FPU_IRQHandler                  
-   .thumb_set FPU_IRQHandler,Default_Handler  
+void GPS_getNMEA (void *argument)
+{
+    char  Q_buff[GPS_MAXLEN];   // buffer for chars in queue
+	char  MSG_buff[GPS_MAXLEN]; // buffer for GPS-string
+	int   pos = 0;
+	int   cs;                   // checksum-flag
+	int   new_msg = FALSE;      // do we encounter a '$'-char?
+	int   msg_type = 0;         // do we want this message to be interpreted?
 
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+	UART_puts((char *)__func__); UART_puts("started\n\r");
+
+	while (TRUE)
+	{
+		xQueueReceive(hGPS_Queue, Q_buff, portMAX_DELAY); // get one char from the q
+
+		//UART_putchar(*Q_buff);  // echo, for testing
+
+		if (*Q_buff == '$') // gotcha, new datastring started
+		{
+			memset(MSG_buff, 0, sizeof(MSG_buff)); // clear buff
+			pos = 0;
+			new_msg = TRUE;
+		}
+
+		if (new_msg == FALSE) // char only valid if started by $
+			continue;
+
+		MSG_buff[pos] = *Q_buff; // copy char read from Q into the msg-buf
+
+		// if pos==5, the message type (f.i. "$GPGSA) is complete, so we now we can determine
+		// if we want the rest of the message... else we skip the rest characters
+		if (pos == 5)
+		{
+			msg_type = 0; // reset
+
+			// next, we decide which message types we want to interpret
+			// and we set the message-type for later use...
+			if      (!strncmp(&MSG_buff[1], "GNRMC", 5)) msg_type = eGNRMC;
+			else if (!strncmp(&MSG_buff[1], "GPGSA", 5)) msg_type = eGPGSA;
+			else if (!strncmp(&MSG_buff[1], "GNGGA", 5)) msg_type = eGNGGA;
+
+			if (!msg_type) // not an interesting message type
+			{
+				new_msg = FALSE;
+				continue;
+			}
+		}
+
+		// if we are here, we are reading the rest of the message into the msg_buff
+		////////////////////////////////////////////////////////////////////////////
+		if (pos >= GPS_MAXLEN - 1) // avoid overflow (should not happen, but still...)
+		{
+			new_msg = FALSE; // ignore it
+			continue;
+		}
+
+		if (MSG_buff[pos] == '\r') // end of message encountered - all messages end with <CR-13><LF-10>
+		{
+			MSG_buff[pos] = '\0';          // close string
+			cs = checksum_valid(MSG_buff); // note, checksumchars (eg "*43") are removed from string
+
+			if (Uart_debug_out & GPS_DEBUG_OUT) // output to uart if wanted
+			{
+				UART_puts("\r\nGPS (UART4): "); UART_puts(MSG_buff);
+				UART_puts( cs ? " [cs:OK]\r\n" : " [cs:ERR]\r\n");
+			}
+
+			if (cs) // checksum okay, so interpret the message
+			{
+				switch(msg_type) // extract data from msg into right struct
+				{
+				case eGNRMC: fill_GNRMC(MSG_buff);
+						     // use the data...
+						     break;
+				case eGPGSA:
+				case eGNGGA: break;
+				default:     break;
+				}
+			}
+
+			new_msg = FALSE; // new message possible
+			continue;
+		}
+		pos++; // proceed reading next char from the queue
+	}
+}
+
+
+// source: file:///C:/craigpeacock/NMEA-GPS
+int hex2int(char *c)
+{
+	int value;
+
+	value = hexchar2int(c[0]);
+	value = value << 4;
+	value += hexchar2int(c[1]);
+
+	return value;
+}
+
+
+int hexchar2int(char c)
+{
+    if (c >= '0' && c <= '9')
+        return (c - '0');
+    if (c >= 'A' && c <= 'F')
+        return (c - 'A' + 10);
+    if (c >= 'a' && c <= 'f')
+        return (c - 'a' + 10);
+    return (-1);
+}
+
+
+// source: file:///C:/craigpeacock/NMEA-GPS
+int checksum_valid(char *string)
+{
+	char *checksum_str;
+	int checksum, i;
+	unsigned char calculated_checksum = 0;
+
+	// Checksum is postcede by *
+	if ((checksum_str = strchr(string, '*')))
+	{
+		*checksum_str = '\0'; // Remove checksum from string
+		// Calculate checksum, starting after $ (i = 1)
+		for (i = 1; i < strlen(string); i++)
+			calculated_checksum = calculated_checksum ^ string[i];
+
+		checksum = hex2int((char *)checksum_str+1);
+		//printf("Checksum Str [%s], Checksum %02X, Calculated Checksum %02X\r\n",(char *)checksum_str+1, checksum, calculated_checksum);
+		if (checksum == calculated_checksum)
+			return (1);
+	}
+
+
+
+
+	return (0);
+}
