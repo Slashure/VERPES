@@ -16,8 +16,6 @@
 #include <stdlib.h>
 
 //init
-#define EARTH_RADIUS 6371000 // Earth radius in meters
-
 int Max_waypoint = 20;
 int W_index= 0;
 int i = 0;
@@ -27,7 +25,6 @@ double wy;
 int d;
 int d2;
 
-//de waypoints opslaan in een twee dimmensionale array
 char save_lat[20][20];
 char save_longi[20][20];
 
@@ -36,8 +33,9 @@ double Whoek;
 double latitude_decimal;
 double longitude_decimal;
 
+
 GNRMC gnrmc; // global struct for GNRMC-messages
-NAVI navi; // globale struct makaen zodat we alleen de nuttige dingen van GNRMC meenemen
+NAVI navi;
 
 /**
 * @brief De chars van de binnengekomen GNRMC-string worden in data omgezet, dwz in een
@@ -45,13 +43,13 @@ NAVI navi; // globale struct makaen zodat we alleen de nuttige dingen van GNRMC 
 * om gelijk met doubles te werken, die je dan met atof(); omzet.
 * @return void
 */
-
 void fill_GNRMC(char *message)
 {
 	// example: $GNRMC,164435.000,A,5205.9505,N,00507.0873,E,0.49,21.70,140423,,,A
 	//          id    , time     ,s,
-	char *tok = ","; 
+	char *tok = ",";
 	char *s;
+
 
 	memset(&gnrmc, 0, sizeof(GNRMC)); // clear the struct
 
@@ -82,7 +80,7 @@ void fill_GNRMC(char *message)
 	s = strtok(NULL, tok);    // 8. course;
 	strcpy(gnrmc.course, s);
 	strcpy(navi.course, s);
-	
+
 	if (Uart_debug_out & GPS_DEBUG_OUT)
 	{
 		UART_puts("\r\n\t GPS type: \t");  UART_puts(gnrmc.head);
@@ -96,18 +94,22 @@ void fill_GNRMC(char *message)
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); //ledje aanzetten om te laten zien dat de debug output actief is
 		HAL_Delay(400);
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
-
+		UART_puts("\r\n\tBOGARRR: \t");  UART_puts(gnrmc.head);
 		UART_puts("\r\n\t Navi_Long: \t");  UART_puts(navi.longitude);
 		UART_puts("\r\n\t Navi_Lat: \t");  UART_puts(navi.latitude);
 		UART_puts("\r\n\t Navi_Course: \t");  UART_puts(navi.course);
+
 	}
 }
 
+
+
+
 void waypoint()
 {
-	if (W_index < Max_waypoint) // als W_index lager is dan de maximale gedineerde waypoints
+	if (W_index < Max_waypoint)
 	{
-		strcpy(save_lat[W_index], navi.latitude); //de gegevens van navi.latitude kopieren naar save_lat
+		strcpy(save_lat[W_index], navi.latitude); //de gegevenhs van navi.latitude kopieren naar save_lat
 		strcpy(save_longi[W_index], navi.longitude);
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
 		HAL_Delay(800);
@@ -127,6 +129,7 @@ void waypoint()
 	else
 	{
 		UART_puts("Max_waypoints bereikt\r\n");
+
 	}
 }
 
@@ -138,22 +141,11 @@ void calc_angle()
 	if (i < 20)
 	{
 
-    // init
-
-		//hudige latitude opslaan in een double genaamd save_xxx
+    // Converting latitude and longitude strings to double
 		double save_latF = atof(save_lat[i]); //
 		double save_longiF = atof(save_longi[i]);
-
-		/// Huidige longitude en latitude opslaan in nlongi en nlatti
-		double nlongi = atof(navi.longitude);
-		double nlatti = atof(navi.latitude);
-
-		//beide opgeslagen en huidige coords met elkaar vermedigvuldigen
-	    double save = save_latF* save_longiF;
-	    double navi = nlongi * nlatti;
-
-//////////////////////////////
-	    //de graden en de minuten van beide opgeslagen latiude en longitude uit elkaar trekken en de minuten uitrekenen naar bruikbare coordinaten
+		
+		
         double degrees = save_latF / 100;
         int d = (int)degrees;
         double minutes = (degrees - d) * 100;
@@ -163,9 +155,7 @@ void calc_angle()
         int d2 = (int)degrees2;
         double minutes2 = (degrees2 - d2) * 100;
         double longitude_decimal = d2 + (minutes2 / 60.0);
-//////////////////////////////////
 
-        //beide nieuwe omgerekende waardes in een double zetten
         double wx =  latitude_decimal;
         double wy =  longitude_decimal;
 
@@ -174,12 +164,13 @@ void calc_angle()
 		sprintf(buffer, "\r\n\t wy: \t%f", wy);
 		UART_puts(buffer);
 
-        // gecaculeerde coordinaten naar bepaalde kwadranten sturen
+
+        // Calculating the angle based on the quadrant
         if (wx > 0 && wy > 0)  // + +
         {
         	Whoek = 90 - atan2(wy, wx) * (180.0 / M_PI);  // atan2 returns radians, convert to degrees
         }
-		else if (wx < 0 && wy > 0)  // - + 
+		else if (wx < 0 && wy > 0)  // - +
 		{
 			Whoek = 270 + atan2(wy, wx) * (180.0 / M_PI);
 		}
@@ -191,21 +182,22 @@ void calc_angle()
 		{
 			Whoek = 90 + atan2(wy, wx) * (180.0 / M_PI);
 		}
-        
-        if (navi==save) //als de huidige coords overeenkomen met de opgeslagen coords dan kan je naar de volgende waypoint gaan
-        {
-        i++;
+
+		i++;
+
 		sprintf(buffer, "\r\n\tAfter incrementing i \t%d", i);
 				UART_puts(buffer);
-        }
+
 	    //   float whoek = (float)Whoek;
 			sprintf(buffer, "\r\n\t Waarde van Whoek: \t%f", Whoek);
 			UART_puts(buffer);  // Print WhoekF
+
 		osDelay(100);
 	}
 	else
 	{
 		UART_puts("Max waypoint reached no more calcs for U :)\r\n");
+
 	}
 }
 /**
@@ -261,53 +253,6 @@ void servo()
         HAL_Delay(pwm);
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
         HAL_Delay(20 - pwm);
-    }
-}
-
-double deg2rad(double deg) {
-    return deg * (M_PI / 180.0);
-}
-
-double haversine_distance(double lat1, double lon1, double lat2, double lon2) {
-    double dlat = deg2rad(lat2 - lat1);
-    double dlon = deg2rad(lon2 - lon1);
-
-    double a = sin(dlat / 2) * sin(dlat / 2) +
-               cos(deg2rad(lat1)) * cos(deg2rad(lat2)) *
-               sin(dlon / 2) * sin(dlon / 2);
-
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return EARTH_RADIUS * c; // Distance in meters
-}
-
-
-void check_waypoint_proximity() {
-    double current_lat = atof(navi.latitude);  // Convert the current lat/long to double
-    double current_long = atof(navi.longitude);
-
-    for (int i = 0; i < W_index; i++) {
-        double waypoint_lat = atof(save_lat[i]);
-        double waypoint_long = atof(save_longi[i]);
-
-        // Calculate the distance to the waypoint
-        double distance = haversine_distance(current_lat, current_long, waypoint_lat, waypoint_long);
-
-        char buffer[100];
-        sprintf(buffer, "\r\n Distance to waypoint %d: %f meters", i, distance);
-        UART_puts(buffer);
-
-        // Check if the distance is within 2 meters
-        if (distance <= 2.0) {
-            UART_puts("\r\n You are within 2 meters of waypoint ");
-            sprintf(buffer, "%d", i);
-            UART_puts(buffer);
-
-            // You can trigger additional actions if needed, e.g., light up an LED
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
-            HAL_Delay(800);
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
-        }
     }
 }
 
@@ -397,7 +342,6 @@ void GPS_getNMEA (void *argument)
 		}
 		pos++; // proceed reading next char from the queue
 	}
-	check_waypoint_proximity(); //de functie blijven gebruiken na elke bericht dan binnengekomen is
 }
 
 
