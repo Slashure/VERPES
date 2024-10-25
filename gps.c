@@ -15,11 +15,9 @@
 #include "gps.h"
 #include <stdlib.h>
 
-
-
-
 //init
 #define EARTH_RADIUS 6371000 // Earth radius in meters
+
 int Max_waypoint = 20;
 int W_index= 0;
 int i = 0;
@@ -29,6 +27,7 @@ double wy;
 int d;
 int d2;
 
+//de waypoints opslaan in een twee dimmensionale array
 char save_lat[20][20];
 char save_longi[20][20];
 
@@ -37,9 +36,8 @@ double Whoek;
 double latitude_decimal;
 double longitude_decimal;
 
-
 GNRMC gnrmc; // global struct for GNRMC-messages
-NAVI navi;
+NAVI navi; // globale struct makaen zodat we alleen de nuttige dingen van GNRMC meenemen
 
 /**
 * @brief De chars van de binnengekomen GNRMC-string worden in data omgezet, dwz in een
@@ -47,13 +45,13 @@ NAVI navi;
 * om gelijk met doubles te werken, die je dan met atof(); omzet.
 * @return void
 */
+
 void fill_GNRMC(char *message)
 {
 	// example: $GNRMC,164435.000,A,5205.9505,N,00507.0873,E,0.49,21.70,140423,,,A
 	//          id    , time     ,s,
-	char *tok = ",";
+	char *tok = ","; 
 	char *s;
-
 
 	memset(&gnrmc, 0, sizeof(GNRMC)); // clear the struct
 
@@ -84,7 +82,7 @@ void fill_GNRMC(char *message)
 	s = strtok(NULL, tok);    // 8. course;
 	strcpy(gnrmc.course, s);
 	strcpy(navi.course, s);
-
+	
 	if (Uart_debug_out & GPS_DEBUG_OUT)
 	{
 		UART_puts("\r\n\t GPS type: \t");  UART_puts(gnrmc.head);
@@ -98,22 +96,18 @@ void fill_GNRMC(char *message)
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); //ledje aanzetten om te laten zien dat de debug output actief is
 		HAL_Delay(400);
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
-		UART_puts("\r\n\tBOGARRR: \t");  UART_puts(gnrmc.head);
+
 		UART_puts("\r\n\t Navi_Long: \t");  UART_puts(navi.longitude);
 		UART_puts("\r\n\t Navi_Lat: \t");  UART_puts(navi.latitude);
 		UART_puts("\r\n\t Navi_Course: \t");  UART_puts(navi.course);
-
 	}
 }
 
-
-
-
 void waypoint()
 {
-	if (W_index < Max_waypoint)
+	if (W_index < Max_waypoint) // als W_index lager is dan de maximale gedineerde waypoints
 	{
-		strcpy(save_lat[W_index], navi.latitude); //de gegevenhs van navi.latitude kopieren naar save_lat
+		strcpy(save_lat[W_index], navi.latitude); //de gegevens van navi.latitude kopieren naar save_lat
 		strcpy(save_longi[W_index], navi.longitude);
 		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
 		HAL_Delay(800);
@@ -133,7 +127,6 @@ void waypoint()
 	else
 	{
 		UART_puts("Max_waypoints bereikt\r\n");
-
 	}
 }
 
@@ -159,8 +152,6 @@ void calc_angle()
 	    double save = save_latF* save_longiF;
 	    double navi = nlongi * nlatti;
 
-
-
 //////////////////////////////
 	    //de graden en de minuten van beide opgeslagen latiude en longitude uit elkaar trekken en de minuten uitrekenen naar bruikbare coordinaten
         double degrees = save_latF / 100;
@@ -174,8 +165,6 @@ void calc_angle()
         double longitude_decimal = d2 + (minutes2 / 60.0);
 //////////////////////////////////
 
-
-
         //beide nieuwe omgerekende waardes in een double zetten
         double wx =  latitude_decimal;
         double wy =  longitude_decimal;
@@ -185,13 +174,12 @@ void calc_angle()
 		sprintf(buffer, "\r\n\t wy: \t%f", wy);
 		UART_puts(buffer);
 
-
-        // Calculating the angle based on the quadrant
+        // gecaculeerde coordinaten naar bepaalde kwadranten sturen
         if (wx > 0 && wy > 0)  // + +
         {
         	Whoek = 90 - atan2(wy, wx) * (180.0 / M_PI);  // atan2 returns radians, convert to degrees
         }
-		else if (wx < 0 && wy > 0)  // - +
+		else if (wx < 0 && wy > 0)  // - + 
 		{
 			Whoek = 270 + atan2(wy, wx) * (180.0 / M_PI);
 		}
@@ -203,9 +191,8 @@ void calc_angle()
 		{
 			Whoek = 90 + atan2(wy, wx) * (180.0 / M_PI);
 		}
-
-
-        if (navi==save)
+        
+        if (navi==save) //als de huidige coords overeenkomen met de opgeslagen coords dan kan je naar de volgende waypoint gaan
         {
         i++;
 		sprintf(buffer, "\r\n\tAfter incrementing i \t%d", i);
@@ -219,7 +206,6 @@ void calc_angle()
 	else
 	{
 		UART_puts("Max waypoint reached no more calcs for U :)\r\n");
-
 	}
 }
 /**
@@ -277,8 +263,6 @@ void servo()
         HAL_Delay(20 - pwm);
     }
 }
-
-
 
 double deg2rad(double deg) {
     return deg * (M_PI / 180.0);
@@ -413,7 +397,7 @@ void GPS_getNMEA (void *argument)
 		}
 		pos++; // proceed reading next char from the queue
 	}
-	check_waypoint_proximity();
+	check_waypoint_proximity(); //de functie blijven gebruiken na elke bericht dan binnengekomen is
 }
 
 
