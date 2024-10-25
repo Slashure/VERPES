@@ -16,7 +16,10 @@
 #include <stdlib.h>
 
 
+
+
 //init
+#define EARTH_RADIUS 6371000 // Earth radius in meters
 int Max_waypoint = 20;
 int W_index= 0;
 int i = 0;
@@ -26,15 +29,10 @@ double wy;
 int d;
 int d2;
 
-
-char courseS = 180;
-char servohoek = 300;
-char pwm;
-
-
 char save_lat[20][20];
 char save_longi[20][20];
 
+int courseS;
 double Whoek;
 double latitude_decimal;
 double longitude_decimal;
@@ -86,7 +84,6 @@ void fill_GNRMC(char *message)
 	s = strtok(NULL, tok);    // 8. course;
 	strcpy(gnrmc.course, s);
 	strcpy(navi.course, s);
-
 
 	if (Uart_debug_out & GPS_DEBUG_OUT)
 	{
@@ -145,16 +142,27 @@ void calc_angle()
 
 	char buffer[50];
 
-
-
 	if (i < 20)
 	{
 
-    // Converting latitude and longitude strings to double
+    // init
+
+		//hudige latitude opslaan in een double genaamd save_xxx
 		double save_latF = atof(save_lat[i]); //
 		double save_longiF = atof(save_longi[i]);
 
+		/// Huidige longitude en latitude opslaan in nlongi en nlatti
+		double nlongi = atof(navi.longitude);
+		double nlatti = atof(navi.latitude);
 
+		//beide opgeslagen en huidige coords met elkaar vermedigvuldigen
+	    double save = save_latF* save_longiF;
+	    double navi = nlongi * nlatti;
+
+
+
+//////////////////////////////
+	    //de graden en de minuten van beide opgeslagen latiude en longitude uit elkaar trekken en de minuten uitrekenen naar bruikbare coordinaten
         double degrees = save_latF / 100;
         int d = (int)degrees;
         double minutes = (degrees - d) * 100;
@@ -164,9 +172,19 @@ void calc_angle()
         int d2 = (int)degrees2;
         double minutes2 = (degrees2 - d2) * 100;
         double longitude_decimal = d2 + (minutes2 / 60.0);
+//////////////////////////////////
 
+
+
+        //beide nieuwe omgerekende waardes in een double zetten
         double wx =  latitude_decimal;
         double wy =  longitude_decimal;
+
+		sprintf(buffer, "\r\n\t wx: \t%f", wx);
+		UART_puts(buffer);
+		sprintf(buffer, "\r\n\t wy: \t%f", wy);
+		UART_puts(buffer);
+
 
         // Calculating the angle based on the quadrant
         if (wx > 0 && wy > 0)  // + +
@@ -186,9 +204,16 @@ void calc_angle()
 			Whoek = 90 + atan2(wy, wx) * (180.0 / M_PI);
 		}
 
-		i++;
 
-
+        if (navi==save)
+        {
+        i++;
+		sprintf(buffer, "\r\n\tAfter incrementing i \t%d", i);
+				UART_puts(buffer);
+        }
+	    //   float whoek = (float)Whoek;
+			sprintf(buffer, "\r\n\t Waarde van Whoek: \t%f", Whoek);
+			UART_puts(buffer);  // Print WhoekF
 		osDelay(100);
 	}
 	else
@@ -204,26 +229,104 @@ void calc_angle()
 * @return void
 */
 
-
-
 void servo()
 {
-	servohoek = 360 - courseS + Whoek;
-	if (servohoek > 360)
-	{
-	servohoek = servohoek - 360;
-	}
+    char buffer[50];
 
-	pwm=servohoek*2/360+3.5;
-	for(int j=0; j<100; j++)
-	{
-	    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-	    HAL_Delay(pwm);
-	    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-	    HAL_Delay(20-pwm);
-	}
+    // Convert navi.course from string to double
+    double courseS_double = atof(navi.course);
 
+    // Debug print to verify navi.course
+    UART_puts("\r\n\t Navi_Course: \t");
+    UART_puts(navi.course);
+
+    // Print courseS_double
+    sprintf(buffer, "\r\n\t courseS: \t%f", courseS_double);
+    UART_puts(buffer);
+
+    // Print Whoek
+    sprintf(buffer, "\r\n\t Whoek: \t%f", Whoek);
+    UART_puts(buffer);
+
+    // Calculate servo angle
+    double servohoek = 360.0 - courseS_double + Whoek;
+    if (servohoek > 360.0)
+    {
+        servohoek = servohoek - 360.0;
+    }
+
+    // Debug print for servohoek
+    sprintf(buffer, "\r\n\t Calculated servohoek: \t%f", servohoek);
+    UART_puts(buffer);
+
+    // Calculate PWM value
+    double pwm = servohoek * 2.0 / 360.0;
+
+    // Print servohoek and pwm
+    sprintf(buffer, "\r\n\t servohoek: \t%f", servohoek);
+    UART_puts(buffer);
+    sprintf(buffer, "\r\n\t pwm: \t%f", pwm);
+    UART_puts(buffer);
+
+    // Control servo
+    for(int j = 0; j < 100; j++)
+    {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+        HAL_Delay(pwm);
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
+        HAL_Delay(20 - pwm);
+    }
 }
+
+
+
+double deg2rad(double deg) {
+    return deg * (M_PI / 180.0);
+}
+
+double haversine_distance(double lat1, double lon1, double lat2, double lon2) {
+    double dlat = deg2rad(lat2 - lat1);
+    double dlon = deg2rad(lon2 - lon1);
+
+    double a = sin(dlat / 2) * sin(dlat / 2) +
+               cos(deg2rad(lat1)) * cos(deg2rad(lat2)) *
+               sin(dlon / 2) * sin(dlon / 2);
+
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return EARTH_RADIUS * c; // Distance in meters
+}
+
+
+void check_waypoint_proximity() {
+    double current_lat = atof(navi.latitude);  // Convert the current lat/long to double
+    double current_long = atof(navi.longitude);
+
+    for (int i = 0; i < W_index; i++) {
+        double waypoint_lat = atof(save_lat[i]);
+        double waypoint_long = atof(save_longi[i]);
+
+        // Calculate the distance to the waypoint
+        double distance = haversine_distance(current_lat, current_long, waypoint_lat, waypoint_long);
+
+        char buffer[100];
+        sprintf(buffer, "\r\n Distance to waypoint %d: %f meters", i, distance);
+        UART_puts(buffer);
+
+        // Check if the distance is within 2 meters
+        if (distance <= 2.0) {
+            UART_puts("\r\n You are within 2 meters of waypoint ");
+            sprintf(buffer, "%d", i);
+            UART_puts(buffer);
+
+            // You can trigger additional actions if needed, e.g., light up an LED
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+            HAL_Delay(800);
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+        }
+    }
+}
+
 
 void GPS_getNMEA (void *argument)
 {
@@ -310,6 +413,7 @@ void GPS_getNMEA (void *argument)
 		}
 		pos++; // proceed reading next char from the queue
 	}
+	check_waypoint_proximity();
 }
 
 
